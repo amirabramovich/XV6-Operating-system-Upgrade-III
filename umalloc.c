@@ -2,6 +2,9 @@
 #include "stat.h"
 #include "user.h"
 #include "param.h"
+#include "mmu.h"
+#include "memlayout.h"
+#include "proc.h"
 
 // Memory allocator by Kernighan and Ritchie,
 // The C programming Language, 2nd ed.  Section 8.7.
@@ -20,6 +23,8 @@ typedef union header Header;
 
 static Header base;
 static Header *freep;
+
+extern struct proc* myproc(void);
 
 void
 free(void *ap)
@@ -93,21 +98,28 @@ void*
 pmalloc(void)
 {
   Header *hp, *prevp ,*p;
+  struct proc *curproc = myproc();
 
   if((prevp = freep) == 0){
     base.s.ptr = freep = prevp = &base;
     base.s.size = 0;
   }
   for(p = prevp->s.ptr; ; prevp = p, p = p->s.ptr){
-    if(p->s.size >= 4096){
-      prevp->s.ptr = p->s.ptr;
-      freep = prevp;
-      return (void*)(p + 1);
-    }
     if(p == freep){
       hp = (Header*)(sbrk(4096));
       hp->s.size = 4096;
       free((void*)(hp + 1));
+      prevp = p;
+      p = p->s.ptr;
+      prevp->s.ptr = p->s.ptr;
+      freep = prevp;
+      // pde_t *tmp = curproc->pgdir;
+      // int dir_offset = PDX(p);
+      // tmp += dir_offset;
+      // tmp = *tmp | PTE_PAL;
+      curproc++;
+
+      return (void*)(PGROUNDUP((uint)(p)+1));//(P2V((pte_t*)(V2P(p) | PTE_PAL)));
     }
   }
 }
@@ -115,11 +127,19 @@ pmalloc(void)
 int 
 protect_page(void* ap)
 {
-  return 0;
+  // if ((pte_t*)(V2P(ap + 1) & PTE_PAL)){
+  //   ap = (void*)(P2V(pte_t*)(V2P(ap + 1) | PTE_PRO));
+  //   return 1;
+  // }
+  return -1;
 }
 
 int 
 pfree(void* ap)
 {
-  return 0;
+  // if ((pte_t*)(V2P(ap + 1) & PTE_PAL)){
+  //   free(ap);
+  //   return 1;
+  // }
+  return -1;
 }
