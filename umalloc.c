@@ -92,7 +92,24 @@ malloc(uint nbytes)
 void* 
 pmalloc(void)
 {
-  return 0;
+  Header *hp, *prevp ,*p;
+
+  if((prevp = freep) == 0){
+    base.s.ptr = freep = prevp = &base;
+    base.s.size = 0;
+  }
+  for(p = prevp->s.ptr; ; prevp = p, p = p->s.ptr){
+    if(p->s.size >= 4096){
+      prevp->s.ptr = p->s.ptr;
+      freep = prevp;
+      return (void*)(p + 1);
+    }
+    if(p == freep){
+      hp = (Header*)(sbrk(4096));
+      hp->s.size = 4096;
+      free((void*)(hp + 1));
+    }
+  }
 }
 
 int 
