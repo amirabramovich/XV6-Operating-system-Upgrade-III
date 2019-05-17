@@ -24,6 +24,9 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 int yield(void);
+void pmallocuvm(void*);
+int protectuvm(void*);
+int pfreeuvm(void*);
 
 // ulib.c
 int stat(char*, struct stat*);

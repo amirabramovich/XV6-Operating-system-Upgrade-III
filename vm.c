@@ -383,6 +383,61 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   return 0;
 }
 
+void
+pmallocuvm(void *ap)
+{
+  pde_t *pde;
+  pde_t *pgdir = myproc()->pgdir;
+  if(PTE_ADDR((uint)ap) & 0xFFF)
+    panic("pmalloc: not aligned\n");
+  pde = &pgdir[PDX(ap)];
+  if(*pde & PTE_P){
+    pde = walkpgdir(pgdir,ap,0);
+    *pde |= PTE_PAL;
+    lcr3(V2P(pgdir));
+  }else
+    panic("pmalloc: not present\n");
+}
+
+int
+protectuvm(void *ap)
+{
+  pde_t *pde;
+  pde_t *pgdir = myproc()->pgdir;
+  if(PTE_ADDR((uint)ap) & 0xFFF)
+    return -1;
+  pde = &pgdir[PDX(ap)];
+  if(*pde & PTE_P){
+    pde = walkpgdir(pgdir,ap,0);
+    if(*pde&PTE_PAL){
+      *pde &= ~PTE_W;
+      lcr3(V2P(pgdir));
+      return 1;
+    }
+  }
+  return -1;
+}
+
+int
+pfreeuvm(void *ap)
+{
+  pde_t *pde;
+  pde_t *pgdir = myproc()->pgdir;
+  if(PTE_ADDR((uint)ap) & 0xFFF)
+    return -1;
+  pde = &pgdir[PDX(ap)];
+  if(*pde & PTE_P){
+    pde = walkpgdir(pgdir,ap,0);
+    if(*pde&PTE_PAL){
+      *pde |= PTE_W;
+      *pde &= ~PTE_PAL;
+      lcr3(V2P(pgdir));
+      return 1;
+    }
+  }
+  return -1;
+}
+
 //PAGEBREAK!
 // Blank page.
 //PAGEBREAK!

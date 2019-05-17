@@ -2,9 +2,6 @@
 #include "stat.h"
 #include "user.h"
 #include "param.h"
-#include "mmu.h"
-#include "memlayout.h"
-#include "proc.h"
 
 // Memory allocator by Kernighan and Ritchie,
 // The C programming Language, 2nd ed.  Section 8.7.
@@ -98,7 +95,6 @@ void*
 pmalloc(void)
 {
   Header *hp, *prevp ,*p;
-  struct proc *curproc = myproc();
 
   if((prevp = freep) == 0){
     base.s.ptr = freep = prevp = &base;
@@ -113,13 +109,8 @@ pmalloc(void)
       p = p->s.ptr;
       prevp->s.ptr = p->s.ptr;
       freep = prevp;
-      // pde_t *tmp = curproc->pgdir;
-      // int dir_offset = PDX(p);
-      // tmp += dir_offset;
-      // tmp = *tmp | PTE_PAL;
-      curproc++;
-
-      return (void*)(PGROUNDUP((uint)(p)+1));//(P2V((pte_t*)(V2P(p) | PTE_PAL)));
+      pmallocuvm((void*)(p+1));
+      return (void*)(p+1);//PGROUNDUP((uint)(p)+1)
     }
   }
 }
@@ -127,19 +118,15 @@ pmalloc(void)
 int 
 protect_page(void* ap)
 {
-  // if ((pte_t*)(V2P(ap + 1) & PTE_PAL)){
-  //   ap = (void*)(P2V(pte_t*)(V2P(ap + 1) | PTE_PRO));
-  //   return 1;
-  // }
-  return -1;
+  return protectuvm(ap);
 }
 
 int 
 pfree(void* ap)
 {
-  // if ((pte_t*)(V2P(ap + 1) & PTE_PAL)){
-  //   free(ap);
-  //   return 1;
-  // }
-  return -1;
+  if(protect_page(ap)<0)
+    return -1;
+  int res = pfreeuvm(ap);
+  free(ap);
+  return res;
 }

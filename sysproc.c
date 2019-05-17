@@ -44,6 +44,37 @@ sys_kill(void)
 }
 
 int
+sys_pmallocuvm(void)
+{
+  void* ap;
+
+  if(argptr(0, (void*)&ap,2*sizeof(ap)) < 0)
+    return -1;
+  pmallocuvm(ap);
+  return 0;
+}
+
+int
+sys_protectuvm(void)
+{
+  void* ap;
+
+  if(argptr(0, (void*)&ap,2*sizeof(ap)) < 0)
+    return -1;
+  return protectuvm(ap);
+}
+
+int
+sys_pfreeuvm(void)
+{
+  void* ap;
+
+  if(argptr(0, (void*)&ap,2*sizeof(ap)) < 0)
+    return -1;
+  return pfreeuvm(ap);
+}
+
+int
 sys_getpid(void)
 {
   return myproc()->pid;
