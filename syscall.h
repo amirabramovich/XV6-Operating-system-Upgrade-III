@@ -21,3 +21,6 @@
 #define SYS_mkdir  20
 #define SYS_close  21
 #define SYS_yield  22
+#define SYS_pmallocuvm 23
+#define SYS_protectuvm 24
+#define SYS_pfreeuvm   25
