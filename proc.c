@@ -101,6 +101,15 @@ found:
   // Leave room for trap frame.
   sp -= sizeof *p->tf;
   p->tf = (struct trapframe*)sp;
+  p->load_counter = 0;
+  p->pgfaults_counter = 0;
+  p->times_moved = 0;
+  p->protected_pages = 0;
+
+  #if (defined(LIFO) || defined(SCFIFO))
+  if(p->pid > 2)
+    createSwapFile(p);
+  #endif
 
   // Set up new context to start executing at forkret,
   // which returns to trapret.
@@ -174,6 +183,18 @@ growproc(int n)
   return 0;
 }
 
+void copy_file(struct proc* parent, struct proc* child){
+  if (parent->pid < 3)
+    return;
+  char buff[PGSIZE];
+  for (int i = 0; i < MAX_TOTAL_PAGES-MAX_PYSC_PAGES; i++){
+    if (myproc()->file_pages[i].state == USED){
+      readFromSwapFile(parent, buff, PGSIZE*i, PGSIZE);
+      writeToSwapFile(child, buff, PGSIZE*i, PGSIZE);
+    }
+  }
+}
+
 // Create a new process copying p as the parent.
 // Sets up stack to return as if from system call.
 // Caller must set state of returned proc to RUNNABLE.
@@ -197,6 +218,20 @@ fork(void)
     return -1;
   }
   np->sz = curproc->sz;
+  #if (defined(LIFO) || defined(SCFIFO))
+  if (curproc->pid > 2){
+    copy_file(curproc, np);
+    np->load_counter = curproc->load_counter;
+    for (i = 0; i < MAX_PYSC_PAGES; i++){
+      np->memory_pages[i] = curproc->memory_pages[i];
+      np->memory_pages[i].pgdir = np->pgdir;
+    }
+    for (i = 0; i < MAX_TOTAL_PAGES-MAX_PYSC_PAGES; i++){
+      np->file_pages[i] = curproc->file_pages[i];
+      np->file_pages[i].pgdir = np->pgdir;
+    }
+  }
+  #endif
   np->parent = curproc;
   *np->tf = *curproc->tf;
 
@@ -211,6 +246,9 @@ fork(void)
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
   pid = np->pid;
+  np->protected_pages = curproc->protected_pages;
+  np->pgfaults_counter = 0;
+  np->times_moved = 0;
 
   acquire(&ptable.lock);
 
@@ -241,6 +279,10 @@ exit(void)
       curproc->ofile[fd] = 0;
     }
   }
+  #if (defined(LIFO) || defined(SCFIFO))
+  if (curproc->pid > 2) 
+    removeSwapFile(curproc);
+  #endif
 
   begin_op();
   iput(curproc->cwd);
@@ -263,6 +305,12 @@ exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+      
+  #if TRUE
+    procdump();
+  #endif
+    
+  // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
 }
@@ -291,6 +339,12 @@ wait(void)
         p->kstack = 0;
         freevm(p->pgdir);
         p->pid = 0;
+        #if (defined(LIFO) || defined(SCFIFO))
+        for (int i = 0; i < MAX_PYSC_PAGES; i++)
+          p->memory_pages[i].state = NOTUSED;
+        for (int i = 0; i < MAX_TOTAL_PAGES-MAX_PYSC_PAGES; i++)
+          p->file_pages[i].state = NOTUSED;
+        #endif
         p->parent = 0;
         p->name[0] = 0;
         p->killed = 0;
@@ -496,6 +550,16 @@ kill(int pid)
   return -1;
 }
 
+int 
+pages_in_file(struct proc* p)
+{
+  int count = 0;
+  for (int i = 0; i < MAX_PYSC_PAGES; i++)
+    if (p->file_pages[i].state == USED)
+      count++;
+  return count;
+}
+
 //PAGEBREAK: 36
 // Print a process listing to console.  For debugging.
 // Runs when user types ^P on console.
@@ -511,10 +575,8 @@ procdump(void)
   [RUNNING]   "run   ",
   [ZOMBIE]    "zombie"
   };
-  int i;
   struct proc *p;
   char *state;
-  uint pc[10];
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
     if(p->state == UNUSED)
@@ -523,12 +585,8 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
-    if(p->state == SLEEPING){
-      getcallerpcs((uint*)p->context->ebp+2, pc);
-      for(i=0; i<10 && pc[i] != 0; i++)
-        cprintf(" %p", pc[i]);
-    }
-    cprintf("\n");
+    cprintf("%d %s %d %d %d %d %d %s\n", p->pid, state, PGROUNDUP(p->sz)/PGSIZE, 
+      pages_in_file(p), p->protected_pages, p->pgfaults_counter, p->times_moved ,p->name);
   }
+  cprintf("%d/%d free pages in the system\n",free_pages(),total_pages());
 }

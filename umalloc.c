@@ -21,8 +21,6 @@ typedef union header Header;
 static Header base;
 static Header *freep;
 
-extern struct proc* myproc(void);
-
 void
 free(void *ap)
 {

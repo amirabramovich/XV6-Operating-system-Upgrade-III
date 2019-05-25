@@ -216,6 +216,169 @@ loaduvm(pde_t *pgdir, char *addr, struct inode *ip, uint offset, uint sz)
   return 0;
 }
 
+int 
+free_file_index(void) 
+{
+  for (int i = 0; i < MAX_TOTAL_PAGES - MAX_PYSC_PAGES; i++) {
+    if (myproc()->file_pages[i].state == NOTUSED)
+      return i;
+  }
+  return -1;
+}
+
+int 
+free_memory_index(void) 
+{
+  for (int i = 0; i < MAX_PYSC_PAGES; i++) {
+    if (myproc()->memory_pages[i].state == NOTUSED)
+      return i;
+  }
+  return -1;
+}
+
+int 
+move_to_file(struct proc * p, int virtual_address, pde_t *pgdir) 
+{
+  int index = free_file_index();
+  int res = writeToSwapFile(p, (char*)virtual_address, PGSIZE*index, PGSIZE);
+  p->file_pages[index].state = USED;
+  p->file_pages[index].virtual_address = virtual_address;
+  p->file_pages[index].pgdir = pgdir;
+  p->file_pages[index].load_order = 0;
+  return res;
+}
+
+int 
+move_to_memory(struct proc * p, int memory_index, int virtual_address, char* buff) 
+{
+  for (int i = 0; i < MAX_TOTAL_PAGES - MAX_PYSC_PAGES; i++) {
+    if (p->file_pages[i].virtual_address == virtual_address) {
+      int res = readFromSwapFile(p, buff, i*PGSIZE, PGSIZE);
+      if (res == -1)
+        break;
+      p->memory_pages[memory_index] = p->file_pages[i];
+      p->memory_pages[memory_index].load_order = myproc()->load_counter++;
+      p->file_pages[i].state = NOTUSED;
+      return res;
+    }
+  }
+  return -1;
+}
+
+void 
+set_file_flags(int virtual_address, pde_t * pgdir)
+{
+  pte_t *pte = walkpgdir(pgdir, (int*)virtual_address, 0);
+  *pte |= PTE_PG;
+  *pte &= ~PTE_P;
+  *pte &= PTE_FLAGS(*pte);
+  lcr3(V2P(myproc()->pgdir));
+}
+
+void 
+set_memory_flags(int virtual_address, int page_address, pde_t * pgdir)
+{
+  pte_t *pte = walkpgdir(pgdir, (int*)virtual_address, 0);
+  *pte &= ~PTE_PG;
+  *pte |= PTE_P | PTE_W | PTE_U;
+  *pte |= page_address;
+  lcr3(V2P(myproc()->pgdir));
+}
+
+int 
+in_file(int virtual_address, pde_t * pgdir) 
+{
+  pte_t *pte = walkpgdir(pgdir, (char *)virtual_address, 0);
+  return (*pte & PTE_PG); 
+}
+
+int 
+removeLIFO(void)
+{
+  int index = -1;
+  uint load_order = 0;
+
+  for (int i = 0; i < MAX_PYSC_PAGES; i++) {
+    if (myproc()->memory_pages[i].state == USED && myproc()->memory_pages[i].load_order > load_order) {
+        load_order = myproc()->memory_pages[i].load_order;
+        index = i;          
+    }
+  }
+  return index;
+}
+
+int 
+removeSCFIFO(void)
+{
+again:{
+    int index = -1;
+    uint load_order = 0xFFFFFFFF;
+    for (int i = 0; i < MAX_PYSC_PAGES; i++) {
+      if (myproc()->memory_pages[i].state == USED && myproc()->memory_pages[i].load_order <= load_order){
+        index = i;
+        load_order = myproc()->memory_pages[i].load_order;
+      }
+    }
+    pte_t *pte = walkpgdir(myproc()->memory_pages[index].pgdir, (char*)myproc()->memory_pages[index].virtual_address,0);
+    if (*pte & PTE_A) {
+      *pte &= ~PTE_A;
+        myproc()->memory_pages[index].load_order = myproc()->load_counter++;
+        goto again;
+    }
+    return index;
+  }
+}
+
+int 
+remove_page(void)
+{
+  #if LIFO
+    return removeLIFO();
+  #endif
+  #if SCFIFO
+    return removeSCFIFO();
+  #endif
+  return -1;
+}
+
+static char buff[PGSIZE];
+
+int 
+page_from_file(int cr2)
+{
+  myproc()->pgfaults_counter++;
+  int virtual_address = PGROUNDDOWN(cr2);
+  char * tmp = kalloc();
+  memset(tmp, 0, PGSIZE);
+  int index = free_memory_index();
+  lcr3(V2P(myproc()->pgdir));
+  if (index >= 0) { 
+    set_memory_flags(virtual_address, V2P(tmp), myproc()->pgdir);
+    move_to_memory(myproc(), index, virtual_address, (char*)virtual_address);
+    return 1;
+  }
+  myproc()->times_moved++;
+  index = remove_page(); 
+  struct page_struct chosen_page = myproc()->memory_pages[index];
+  set_memory_flags(virtual_address, V2P(tmp), myproc()->pgdir);
+  move_to_memory(myproc(), index, virtual_address, buff); 
+  pte_t *pte = walkpgdir(chosen_page.pgdir, (int*)chosen_page.virtual_address, 0);
+  int pg_addr = PTE_ADDR(*pte);
+  memmove(tmp, buff, PGSIZE);
+  move_to_file(myproc(), chosen_page.virtual_address, chosen_page.pgdir);
+  set_file_flags(chosen_page.virtual_address, chosen_page.pgdir);
+  kfree(P2V(pg_addr)); 
+  return 1;
+}
+
+int 
+none_policy(void)
+{
+	#if NONE
+		return 1;
+	#endif
+	return 0;
+}
 // Allocate page tables and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
 int
@@ -230,22 +393,50 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
     return oldsz;
 
   a = PGROUNDUP(oldsz);
+  int i = 0;
   for(; a < newsz; a += PGSIZE){
     mem = kalloc();
+    i++;
     if(mem == 0){
       cprintf("allocuvm out of memory\n");
       deallocuvm(pgdir, newsz, oldsz);
       return 0;
     }
     memset(mem, 0, PGSIZE);
-    if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
-      cprintf("allocuvm out of memory (2)\n");
-      deallocuvm(pgdir, newsz, oldsz);
-      kfree(mem);
-      return 0;
-    }
+    mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U);
+    if (!none_policy() && myproc()->pid > 2){
+      if (PGROUNDUP(oldsz)/PGSIZE + i > MAX_PYSC_PAGES){ 
+        myproc()->times_moved++;
+        int outIndex = remove_page();
+        pte_t *pte = walkpgdir(myproc()->memory_pages[outIndex].pgdir, (int*)myproc()->memory_pages[outIndex].virtual_address, 0);
+        move_to_file(myproc(), myproc()->memory_pages[outIndex].virtual_address, myproc()->memory_pages[outIndex].pgdir);
+        kfree(P2V(PTE_ADDR(*pte))); 
+        myproc()->memory_pages[outIndex].state = NOTUSED;
+        set_file_flags(myproc()->memory_pages[outIndex].virtual_address, myproc()->memory_pages[outIndex].pgdir);
+      }
+      int index = free_memory_index();
+      myproc()->memory_pages[index].state = USED;
+      myproc()->memory_pages[index].pgdir = pgdir;
+      myproc()->memory_pages[index].load_order = myproc()->load_counter++;
+      myproc()->memory_pages[index].virtual_address = a;
+	  }
   }
   return newsz;
+}
+
+void 
+clear_from_memory(uint virtual_address, pde_t *pgdir)
+{
+  if (myproc() == 0)
+    return;
+  for (int i = 0; i < MAX_PYSC_PAGES; i++) {
+    if (myproc()->memory_pages[i].state == USED 
+        && myproc()->memory_pages[i].virtual_address == virtual_address
+        && myproc()->memory_pages[i].pgdir == pgdir){
+      myproc()->memory_pages[i].state = NOTUSED;
+      return;
+    }
+  }
 }
 
 // Deallocate user pages to bring the process size from oldsz to
@@ -272,6 +463,8 @@ deallocuvm(pde_t *pgdir, uint oldsz, uint newsz)
         panic("kfree");
       char *v = P2V(pa);
       kfree(v);
+      if (!none_policy())
+      	clear_from_memory(a, pgdir);
       *pte = 0;
     }
   }
@@ -325,6 +518,10 @@ copyuvm(pde_t *pgdir, uint sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walkpgdir(pgdir, (void *) i, 0)) == 0)
       panic("copyuvm: pte should exist");
+    if (*pte & PTE_PG){
+    	set_file_flags(i, d);
+    	continue;
+    }
     if(!(*pte & PTE_P))
       panic("copyuvm: page not present");
     pa = PTE_ADDR(*pte);
@@ -411,6 +608,7 @@ protectuvm(void *ap)
     pde = walkpgdir(pgdir,ap,0);
     if(*pde&PTE_PAL){
       *pde &= ~PTE_W;
+      myproc()->protected_pages++;
       lcr3(V2P(pgdir));
       return 1;
     }
@@ -431,6 +629,7 @@ pfreeuvm(void *ap)
     if(*pde&PTE_PAL){
       *pde |= PTE_W;
       *pde &= ~PTE_PAL;
+      myproc()->protected_pages--;
       lcr3(V2P(pgdir));
       return 1;
     }

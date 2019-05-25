@@ -77,6 +77,12 @@ trap(struct trapframe *tf)
             cpuid(), tf->cs, tf->eip);
     lapiceoi();
     break;
+  case T_PGFLT:
+    if (myproc() != 0 && (tf->cs&3) == 3 &&in_file(rcr2(), myproc()->pgdir)){
+      if (page_from_file(rcr2())){
+        break;
+      }
+    }
 
   //PAGEBREAK: 13
   default:
