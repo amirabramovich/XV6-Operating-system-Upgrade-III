@@ -583,29 +583,20 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
 void
 pmallocuvm(void *ap)
 {
-  pde_t *pde;
   pde_t *pgdir = myproc()->pgdir;
-  if(PTE_ADDR((uint)ap) & 0xFFF)
-    panic("pmalloc: not aligned\n");
-  pde = &pgdir[PDX(ap)];
-  if(*pde & PTE_P){
-    pde = walkpgdir(pgdir,ap,0);
+  if((PTE_ADDR((uint)ap) & 0xFFF) == 0){
+    pde_t* pde = walkpgdir(pgdir,ap,0);
     *pde |= PTE_PAL;
     lcr3(V2P(pgdir));
-  }else
-    panic("pmalloc: not present\n");
+  }
 }
 
 int
 protectuvm(void *ap)
 {
-  pde_t *pde;
   pde_t *pgdir = myproc()->pgdir;
-  if(PTE_ADDR((uint)ap) & 0xFFF)
-    return -1;
-  pde = &pgdir[PDX(ap)];
-  if(*pde & PTE_P){
-    pde = walkpgdir(pgdir,ap,0);
+  if((PTE_ADDR((uint)ap) & 0xFFF) == 0){
+    pde_t* pde = walkpgdir(pgdir,ap,0);
     if(*pde&PTE_PAL){
       *pde &= ~PTE_W;
       myproc()->protected_pages++;
@@ -619,13 +610,9 @@ protectuvm(void *ap)
 int
 pfreeuvm(void *ap)
 {
-  pde_t *pde;
   pde_t *pgdir = myproc()->pgdir;
-  if(PTE_ADDR((uint)ap) & 0xFFF)
-    return -1;
-  pde = &pgdir[PDX(ap)];
-  if(*pde & PTE_P){
-    pde = walkpgdir(pgdir,ap,0);
+  if((PTE_ADDR((uint)ap) & 0xFFF) == 0){
+    pde_t* pde = walkpgdir(pgdir,ap,0);
     if(*pde&PTE_PAL){
       *pde |= PTE_W;
       *pde &= ~PTE_PAL;
